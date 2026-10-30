@@ -1,0 +1,1431 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fbx2tmo web</title>
+<style>
+  :root { --bg: #1e2026; --panel: #262931; --line: #353945; --text: #e4e6eb; --dim: #9aa0ad; --accent: #e0607e; --err: #ff8080; --ok: #8fd19e; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; display: flex; flex-direction: column; gap: 16px; }
+  h1 { font-size: 18px; margin: 0; } h1 span { color: var(--dim); font-weight: 400; }
+  p { margin: 0; color: var(--dim); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  label.cap { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  .drop { border: 1.5px dashed var(--line); border-radius: 8px; padding: 12px; display: flex; gap: 10px; align-items: center; }
+  .drop.over { border-color: var(--accent); }
+  .drop .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .drop .name.none { color: var(--dim); }
+  button, select, input, textarea { font: inherit; color: var(--text); }
+  button, select, input[type=number], textarea { background: #30343e; border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+  button { cursor: pointer; } button:hover:not(:disabled) { border-color: #4a5060; } button:disabled { opacity: .4; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .grid label { display: flex; flex-direction: column; gap: 4px; color: var(--dim); font-size: 12px; }
+  .checks { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+  .checks label { display: flex; gap: 6px; align-items: center; }
+  textarea { width: 100%; min-height: 70px; font: 12px ui-monospace, monospace; }
+  details summary { cursor: pointer; color: var(--dim); }
+  #status { min-height: 1.4em; color: var(--dim); }
+  #status.err { color: var(--err); } #status.ok { color: var(--ok); }
+  #result { display: none; } #result.show { display: flex; }
+  .stats { font: 12px ui-monospace, monospace; color: var(--text); white-space: pre-wrap; }
+  .bones { font-size: 12px; color: var(--dim); }
+  .bones b { color: var(--text); font-weight: 600; }
+  a.download { align-self: flex-start; text-decoration: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>fbx2tmo <span>web</span></h1>
+  <p>Converts an FBX animation (Mixamo and other binary FBX 7.x) into a SK: Estival Versus motion (<code>.tmo</code>).
+    Everything runs in this page; no file is uploaded.</p>
+
+  <section class="card">
+    <label class="cap">1 · Animation</label>
+    <div class="drop" id="fbxdrop"><button id="fbxbtn">Choose FBX…</button><span class="name none" id="fbxname">no file (or drop one here)</span></div>
+    <input type="file" id="fbxfile" accept=".fbx" hidden>
+    <label class="cap">2 · Target skeleton (optional)</label>
+    <div class="drop" id="mdldrop"><button id="mdlbtn">Choose model…</button><span class="name none" id="mdlname">default: pl00 body (ninjacos00_00)</span><button id="mdlclear" hidden>×</button></div>
+    <input type="file" id="mdlfile" accept=".cat,.tmd2" hidden>
+    <p>A costume <code>.cat</code> (e.g. <code>Model/Costume/Ninja/00_00_H.cat</code>) or a <code>.tmd2</code>: its body skeleton becomes the target.</p>
+  </section>
+
+  <section class="card">
+    <label class="cap">3 · Options</label>
+    <div class="grid">
+      <label>Output frame rate<input type="number" id="fps" value="60" min="1" max="240"></label>
+      <label>Root motion<select id="root"><option value="hips">on the hips (default)</option><option value="ido">horizontal on 'ido', height on hips</option><option value="inplace">in place (drop horizontal)</option></select></label>
+      <label>Scale (empty = automatic)<input type="number" id="scale" step="any" placeholder="auto"></label>
+      <label>Start frame<input type="number" id="start" min="0" placeholder="0"></label>
+      <label>End frame<input type="number" id="end" min="0" placeholder="last"></label>
+      <label>Rest pose from source frame<input type="number" id="restframe" min="0" placeholder="file's rest pose"></label>
+    </div>
+    <div class="checks">
+      <label><input type="checkbox" id="float"> 32-bit float keys (flags 0x31)</label>
+      <label><input type="checkbox" id="nofingers"> don't animate the fingers</label>
+      <label><input type="checkbox" id="noalign"> no bind-pose matching</label>
+    </div>
+    <details>
+      <summary>Bone mapping overrides</summary>
+      <textarea id="map" placeholder="SourceBoneName  gameBone | 0xHASH | -    (one per line; '-' unmaps)"></textarea>
+    </details>
+  </section>
+
+  <section class="card">
+    <div class="row"><button class="primary" id="convert" disabled>Convert</button></div>
+    <div id="status"></div>
+    <div id="result" class="card" style="padding:0;border:0;background:none">
+      <div class="stats" id="stats"></div>
+      <a class="download" id="download"><button class="primary">Download .tmo</button></a>
+      <div class="bones" id="mapped"></div>
+      <div class="bones" id="unmapped"></div>
+    </div>
+  </section>
+</main>
+<script>
+(() => {
+  // src/fbx.js
+  var td = new TextDecoder("utf-8");
+  async function inflate(bytes) {
+    const ds = new DecompressionStream("deflate");
+    const out = new Response(new Blob([bytes]).stream().pipeThrough(ds));
+    return new Uint8Array(await out.arrayBuffer());
+  }
+  var Arr = class {
+    constructor(type, n, enc, bytes) {
+      this.type = type;
+      this.n = n;
+      this.enc = enc;
+      this.bytes = bytes;
+    }
+    async values() {
+      const raw = this.enc === 1 ? await inflate(this.bytes) : this.bytes;
+      const b = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
+      switch (this.type) {
+        case "f":
+          return Array.from(new Float32Array(b, 0, this.n));
+        case "d":
+          return Array.from(new Float64Array(b, 0, this.n));
+        case "l":
+          return Array.from(new BigInt64Array(b, 0, this.n), (x) => Number(x));
+        case "i":
+          return Array.from(new Int32Array(b, 0, this.n));
+        default:
+          return Array.from(new Uint8Array(b, 0, this.n), (x) => x !== 0);
+      }
+    }
+  };
+  var Node = class {
+    constructor(name, props, children) {
+      this.name = name;
+      this.props = props;
+      this.children = children;
+    }
+    find(name) {
+      return this.children.find((c) => c.name === name) || null;
+    }
+    findAll(name) {
+      return this.children.filter((c) => c.name === name);
+    }
+    /** Properties70 -> {name: [type, subtype, flags, values...]} */
+    props70() {
+      const p = this.find("Properties70"), out = {};
+      if (p) {
+        for (const c of p.children) if (c.name === "P" && c.props.length) out[c.props[0]] = c.props.slice(1);
+      }
+      return out;
+    }
+  };
+  function parse(buf) {
+    const u8 = new Uint8Array(buf), v = new DataView(buf);
+    const magic = td.decode(u8.subarray(0, 18));
+    if (magic !== "Kaydara FBX Binary") throw new Error("not a binary FBX file (ASCII FBX is not supported: re-export it as binary)");
+    const version = v.getUint32(23, true), wide = version >= 7500;
+    const prop = (o2) => {
+      const t = String.fromCharCode(u8[o2]);
+      o2 += 1;
+      switch (t) {
+        case "Y":
+          return [v.getInt16(o2, true), o2 + 2];
+        case "C":
+          return [u8[o2] !== 0, o2 + 1];
+        case "I":
+          return [v.getInt32(o2, true), o2 + 4];
+        case "F":
+          return [v.getFloat32(o2, true), o2 + 4];
+        case "D":
+          return [v.getFloat64(o2, true), o2 + 8];
+        case "L":
+          return [v.getBigInt64(o2, true).toString(), o2 + 8];
+        // object ids: strings
+        case "S":
+        case "R": {
+          const n = v.getUint32(o2, true);
+          o2 += 4;
+          const raw = u8.subarray(o2, o2 + n);
+          return [t === "S" ? td.decode(raw) : raw, o2 + n];
+        }
+        case "f":
+        case "d":
+        case "l":
+        case "i":
+        case "b": {
+          const n = v.getUint32(o2, true), enc = v.getUint32(o2 + 4, true), clen = v.getUint32(o2 + 8, true);
+          o2 += 12;
+          return [new Arr(t, n, enc, u8.slice(o2, o2 + clen)), o2 + clen];
+        }
+        default:
+          throw new Error(`unknown FBX property type ${t} at ${o2 - 1}`);
+      }
+    };
+    const node = (o2) => {
+      let end, nprops;
+      if (wide) {
+        end = Number(v.getBigUint64(o2, true));
+        nprops = Number(v.getBigUint64(o2 + 8, true));
+        o2 += 24;
+      } else {
+        end = v.getUint32(o2, true);
+        nprops = v.getUint32(o2 + 4, true);
+        o2 += 12;
+      }
+      const nl = u8[o2];
+      o2 += 1;
+      if (end === 0) return [null, o2];
+      const name = td.decode(u8.subarray(o2, o2 + nl));
+      o2 += nl;
+      const props = [];
+      for (let k = 0; k < nprops; k++) {
+        const [x, o22] = prop(o2);
+        props.push(x);
+        o2 = o22;
+      }
+      const children2 = [], sentinel = wide ? 25 : 13;
+      const zeros = (a2, b) => {
+        for (let i = a2; i < b; i++) if (u8[i]) return false;
+        return true;
+      };
+      while (o2 < end - sentinel || o2 < end && !zeros(o2, end)) {
+        const [c, o22] = node(o2);
+        if (!c) break;
+        children2.push(c);
+        o2 = o22;
+      }
+      return [new Node(name, props, children2), end];
+    };
+    let o = 27;
+    const children = [];
+    while (o < u8.length) {
+      const [c, o2] = node(o);
+      if (!c) break;
+      children.push(c);
+      o = o2;
+    }
+    return new Node("", [version], children);
+  }
+  var KTIME = 46186158e3;
+  var TIME_MODE_FPS = { 1: 120, 2: 100, 3: 60, 4: 50, 5: 48, 6: 30, 7: 30, 8: 30, 9: 29.97, 10: 25, 11: 24, 13: 96, 14: 72, 15: 59.94, 16: 119.88 };
+  var FBX_ORDERS = { 0: "xyz", 1: "xzy", 2: "yzx", 3: "yxz", 4: "zxy", 5: "zyx" };
+  var mm = (a2, b) => a2.map((r) => b[0].map((_, j) => r.reduce((s, x, k) => s + x * b[k][j], 0)));
+  var eye = (n) => Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_2, j) => i === j ? 1 : 0));
+  var rx = (a2) => {
+    const c = Math.cos(a2), s = Math.sin(a2);
+    return [[1, 0, 0], [0, c, -s], [0, s, c]];
+  };
+  var ry = (a2) => {
+    const c = Math.cos(a2), s = Math.sin(a2);
+    return [[c, 0, s], [0, 1, 0], [-s, 0, c]];
+  };
+  var rz = (a2) => {
+    const c = Math.cos(a2), s = Math.sin(a2);
+    return [[c, -s, 0], [s, c, 0], [0, 0, 1]];
+  };
+  var tr3 = (m) => m[0].map((_, j) => m.map((r) => r[j]));
+  function fbxEuler(deg, order = 0) {
+    let m = eye(3);
+    const f = { x: rx, y: ry, z: rz };
+    for (const axis of FBX_ORDERS[order] || "xyz") m = mm(f[axis](deg["xyz".indexOf(axis)] * Math.PI / 180), m);
+    return m;
+  }
+  function interp(t, ts, vs) {
+    const n = ts.length;
+    if (t <= ts[0]) return vs[0];
+    if (t >= ts[n - 1]) return vs[n - 1];
+    let lo = 0, hi = n - 1;
+    while (hi - lo > 1) {
+      const mid = lo + hi >> 1;
+      if (ts[mid] <= t) lo = mid;
+      else hi = mid;
+    }
+    return vs[lo] + (t - ts[lo]) / (ts[hi] - ts[lo]) * (vs[hi] - vs[lo]);
+  }
+  var m4 = (R, T) => [[...R[0], T[0]], [...R[1], T[1]], [...R[2], T[2]], [0, 0, 0, 1]];
+  var FbxAnim = class _FbxAnim {
+    static async load(buf) {
+      const a2 = new _FbxAnim();
+      await a2.init(parse(buf));
+      return a2;
+    }
+    async init(root) {
+      const gsNode = root.find("GlobalSettings"), gs = gsNode ? gsNode.props70() : {};
+      const gv = (k, d) => k in gs ? gs[k][gs[k].length - 1] : d;
+      const mode = gv("TimeMode", 6);
+      this.fps = mode === 14 && gv("CustomFrameRate", -1) > 0 ? gv("CustomFrameRate", 30) : TIME_MODE_FPS[mode] || 30;
+      const objs = root.find("Objects");
+      if (!objs) throw new Error("FBX without Objects");
+      this.models = /* @__PURE__ */ new Map();
+      for (const m of objs.findAll("Model")) {
+        const p = m.props70();
+        const name = String(m.props[1]).split("\0")[0].split(":").pop();
+        const vec = (k, d) => k in p ? p[k].slice(3, 6).map(Number) : d.slice();
+        this.models.set(m.props[0], {
+          name,
+          kind: m.props[2],
+          parent: null,
+          T: vec("Lcl Translation", [0, 0, 0]),
+          R: vec("Lcl Rotation", [0, 0, 0]),
+          S: vec("Lcl Scaling", [1, 1, 1]),
+          pre: vec("PreRotation", [0, 0, 0]),
+          post: vec("PostRotation", [0, 0, 0]),
+          order: "RotationOrder" in p ? Number(p.RotationOrder[p.RotationOrder.length - 1]) : 0,
+          curves: {}
+        });
+      }
+      const cnodes = /* @__PURE__ */ new Map();
+      for (const n of objs.findAll("AnimationCurveNode")) cnodes.set(n.props[0], { prop: null, model: null, axes: {} });
+      const curves = /* @__PURE__ */ new Map();
+      for (const c of objs.findAll("AnimationCurve")) {
+        const kt = c.find("KeyTime"), kv = c.find("KeyValueFloat") || c.find("KeyValueDouble");
+        if (!kt || !kv) continue;
+        curves.set(c.props[0], [(await kt.props[0].values()).map((x) => x / KTIME), await kv.props[0].values()]);
+      }
+      const conns = root.find("Connections");
+      for (const c of conns ? conns.children : []) {
+        const [kind, a2, b] = c.props;
+        if (kind === "OO" && this.models.has(a2) && this.models.has(b)) this.models.get(a2).parent = b;
+        else if (kind === "OP" && cnodes.has(a2) && this.models.has(b)) {
+          cnodes.get(a2).model = b;
+          cnodes.get(a2).prop = c.props[3];
+        } else if (kind === "OP" && curves.has(a2) && cnodes.has(b)) cnodes.get(b).axes[String(c.props[3]).slice(-1).toLowerCase()] = curves.get(a2);
+      }
+      for (const n of cnodes.values()) {
+        if (n.model === null) continue;
+        const key = { "Lcl Translation": "T", "Lcl Rotation": "R", "Lcl Scaling": "S" }[n.prop];
+        if (key) this.models.get(n.model).curves[key] = n.axes;
+      }
+      this.names = [...this.models.values()].map((m) => m.name);
+      this.parent = {};
+      for (const m of this.models.values()) this.parent[m.name] = this.models.has(m.parent) ? this.models.get(m.parent).name : null;
+      let tEnd = 0;
+      for (const m of this.models.values()) for (const ax of Object.values(m.curves)) for (const [t] of Object.values(ax)) if (t.length) tEnd = Math.max(tEnd, t[t.length - 1]);
+      this.duration = tEnd;
+      const B = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+      B[0][gv("CoordAxis", 0)] = gv("CoordAxisSign", 1);
+      B[1][gv("UpAxis", 1)] = gv("UpAxisSign", 1);
+      B[2][gv("FrontAxis", 2)] = gv("FrontAxisSign", 1);
+      this.axis = B;
+    }
+    local(m, t) {
+      const chan = (key, base) => {
+        const v = base.slice();
+        for (const [ax, [ts, vs]] of Object.entries(m.curves[key] || {})) if (ts.length) v["xyz".indexOf(ax)] = interp(t, ts, vs);
+        return v;
+      };
+      const T = chan("T", m.T), R = chan("R", m.R);
+      const R3 = mm(mm(fbxEuler(m.pre, 0), fbxEuler(R, m.order)), tr3(fbxEuler(m.post, 0)));
+      return m4(R3, T);
+    }
+    restWorld() {
+      return this.world(0, true);
+    }
+    world(t, rest = false) {
+      const out = /* @__PURE__ */ new Map();
+      const get = (id) => {
+        if (out.has(id)) return out.get(id);
+        const m = this.models.get(id);
+        const L = rest ? m4(mm(fbxEuler(m.pre, 0), fbxEuler(m.R, m.order)), m.T) : this.local(m, t);
+        const W = this.models.has(m.parent) ? mm(get(m.parent), L) : L;
+        out.set(id, W);
+        return W;
+      };
+      for (const id of this.models.keys()) get(id);
+      const A = m4(this.axis, [0, 0, 0]), res = {};
+      for (const [id, W] of out) res[this.models.get(id).name] = mm(A, W);
+      return res;
+    }
+  };
+
+  // src/util.js
+  var CRC = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) c = c & 1 ? c >>> 1 ^ 3988292384 : c >>> 1;
+    CRC[i] = c >>> 0;
+  }
+  function hash(name) {
+    let h = name.length >>> 0;
+    for (let i = 0; i < name.length; i++) h = (CRC[(h ^ name.charCodeAt(i)) & 255] ^ h >>> 8) >>> 0;
+    return h >>> 0;
+  }
+  function ident() {
+    const m = new Float64Array(16);
+    m[0] = m[5] = m[10] = m[15] = 1;
+    return m;
+  }
+  function mul(a2, b, out) {
+    const o = out && out !== a2 && out !== b ? out : new Float64Array(16);
+    for (let r = 0; r < 4; r++) {
+      const a0 = a2[r * 4], a1 = a2[r * 4 + 1], a22 = a2[r * 4 + 2], a3 = a2[r * 4 + 3];
+      for (let c = 0; c < 4; c++) o[r * 4 + c] = a0 * b[c] + a1 * b[4 + c] + a22 * b[8 + c] + a3 * b[12 + c];
+    }
+    if (out && (out === a2 || out === b)) {
+      out.set(o);
+      return out;
+    }
+    return o;
+  }
+  function eulerXYZ(x, y, z) {
+    const cx = Math.cos(x), sx = Math.sin(x), cy = Math.cos(y), sy = Math.sin(y), cz = Math.cos(z), sz = Math.sin(z);
+    const X = ident();
+    X[5] = cx;
+    X[6] = sx;
+    X[9] = -sx;
+    X[10] = cx;
+    const Y = ident();
+    Y[0] = cy;
+    Y[2] = -sy;
+    Y[8] = sy;
+    Y[10] = cy;
+    const Z = ident();
+    Z[0] = cz;
+    Z[1] = sz;
+    Z[4] = -sz;
+    Z[5] = cz;
+    return mul(mul(X, Y), Z);
+  }
+  function composeSRT(t, r, s) {
+    const R = eulerXYZ(r[0], r[1], r[2]);
+    for (let c = 0; c < 3; c++) {
+      R[c] *= s[0];
+      R[4 + c] *= s[1];
+      R[8 + c] *= s[2];
+    }
+    R[12] = t[0];
+    R[13] = t[1];
+    R[14] = t[2];
+    return R;
+  }
+
+  // src/retarget.js
+  var DEFAULT_SKELETON = [
+    [2581372060, -1, [0, 0, 0]],
+    [1049725038, 0, [0, 0, 0]],
+    [3100815632, 1, [-0, 0.91495, 0.04083]],
+    [3502629220, 2, [0, 0, 0]],
+    [3634891543, 3, [-0, 0.05619, 0.01938]],
+    [3042508516, 4, [-0, 0.06372, 893e-5]],
+    [4188039365, 5, [-0, 0.07043, -516e-5]],
+    [2386009624, 6, [-0, 0.22381, -0.07912]],
+    [165002967, 7, [0, 0.04494, 615e-5]],
+    [2036326611, 8, [-0.0275, 0.07802, -78e-4]],
+    [2203114928, 8, [0.0275, 0.07802, -78e-4]],
+    [4118892246, 8, [0, 0.03897, 0.02519]],
+    [1923054338, 6, [-0.04424, 0.18179, -0.07562]],
+    [2855474325, 12, [-0.0762, -0.0108, -0.01346]],
+    [173039107, 13, [-0.2427, -351e-5, -672e-5]],
+    [3134038616, 14, [-0.22172, 31e-5, 133e-5]],
+    [1502495602, 15, [-0.01173, -788e-5, 0.02143]],
+    [780760036, 16, [-0.04984, -0.01429, 0.02478]],
+    [3078627934, 17, [-0.02575, 0, 107e-5]],
+    [2907089494, 15, [-0.02, 45e-4, 9e-3]],
+    [1539898667, 19, [-0.06602, 884e-5, 0.02018]],
+    [751816125, 20, [-0.03385, 0, 0]],
+    [3049692167, 21, [-0.02741, -0, 0]],
+    [1510643484, 15, [-0.08527, 0.01718, 983e-5]],
+    [755869578, 23, [-0.03712, 0, 0]],
+    [3020224048, 24, [-0.02957, -0, 0]],
+    [3661732544, 15, [-0.02, 45e-4, -65e-4]],
+    [1598390681, 26, [-0.06315, 0.01165, -345e-5]],
+    [675459343, 27, [-0.03514, 0, 0]],
+    [2974539957, 28, [-0.02735, 0, 0]],
+    [1585965998, 26, [-0.0595, 749e-5, -0.02107]],
+    [696310584, 30, [-0.02784, -0, 0]],
+    [2961803906, 31, [-0.02223, 0, 0]],
+    [265202802, 15, [-0.08199, -219e-5, 541e-5]],
+    [2235404673, 14, [-0.11785, 18e-5, 77e-5]],
+    [4063928599, 14, [-0.1871, 27e-5, 115e-5]],
+    [2303797373, 13, [0, 0, 0]],
+    [4267055339, 13, [-0.12135, -176e-5, -336e-5]],
+    [2291156577, 6, [0.04424, 0.18179, -0.07562]],
+    [1346120182, 38, [0.0762, -0.0108, -0.01346]],
+    [4032783200, 39, [0.2427, -351e-5, -672e-5]],
+    [1086496571, 40, [0.22172, 31e-5, 133e-5]],
+    [2254334609, 41, [0.01173, -788e-5, 0.02143]],
+    [4049164807, 42, [0.04984, -0.01429, 0.02478]],
+    [1750076349, 43, [0.02575, 0, 107e-5]],
+    [2493172157, 41, [0.02, 45e-4, 9e-3]],
+    [2216219848, 45, [0.06602, 884e-5, 0.02018]],
+    [4078953566, 46, [0.03385, -0, -0]],
+    [1779873252, 47, [0.02741, 0, 0]],
+    [2245705471, 41, [0.08527, 0.01718, 983e-5]],
+    [4074606185, 49, [0.03712, -0, -0]],
+    [1809113043, 50, [0.02957, 0, -0]],
+    [3818780971, 41, [0.02, 45e-4, -65e-4]],
+    [2157291642, 52, [0.06315, 0.01165, -345e-5]],
+    [4153579756, 53, [0.03514, -0, -0]],
+    [1855703382, 54, [0.02735, 0, -0]],
+    [2170012237, 52, [0.0595, 749e-5, -0.02107]],
+    [4132500187, 56, [0.02784, -0, -0]],
+    [1868145505, 57, [0.02223, 0, -0]],
+    [4123103505, 41, [0.08199, -219e-5, 541e-5]],
+    [3168924266, 40, [0.11785, 18e-5, 77e-5]],
+    [3420898044, 40, [0.1871, 27e-5, 115e-5]],
+    [2962049942, 39, [0, 0, 0]],
+    [3347741440, 39, [0.12135, -176e-5, -336e-5]],
+    [2069273066, 6, [-0.06122, 0.07835, 0.0471]],
+    [1844320144, 6, [0.06122, 0.07835, 0.0471]],
+    [3651983687, 6, [0, 0.23606, 0.02297]],
+    [104888745, 6, [0.04106, 0.23799, -0.12547]],
+    [1900497215, 67, [0.06027, 0.01223, -0.0393]],
+    [3897432197, 68, [0.0508, 0.01917, -0.05184]],
+    [2672371731, 69, [0.04783, 0.02509, -0.07011]],
+    [19774896, 70, [0.04231, 0.02629, -0.07865]],
+    [1780428627, 3, [-0.08297, -0.04455, -0.01898]],
+    [1758112273, 72, [37e-5, -0.36986, -0.01988]],
+    [3016778138, 73, [-29e-5, -0.38852, -0.05702]],
+    [1370314402, 74, [0, -0.07266, 0.11081]],
+    [2337278361, 73, [-37e-5, -0.19426, -0.02851]],
+    [1888893161, 72, [0, -0.18493, -994e-5]],
+    [2416972336, 3, [0.08297, -0.04455, -0.01898]],
+    [2462422898, 78, [-37e-5, -0.36986, -0.01988]],
+    [1239375097, 79, [29e-5, -0.38852, -0.05702]],
+    [2879548353, 80, [-0, -0.07266, 0.11081]],
+    [2995546738, 79, [37e-5, -0.19426, -0.02851]],
+    [1229609730, 78, [-0, -0.18493, -994e-5]],
+    [3958141127, 3, [0, 0, 0]],
+    [2632663121, 84, [0, 0, 0]],
+    [21841631, 84, [-0.13135, 0.06106, 594e-5]],
+    [1984591433, 86, [-0.02956, -0.05687, -0.01107]],
+    [4014155763, 87, [-0.02998, -0.06411, -945e-5]],
+    [2554599269, 88, [-0.03204, -0.05444, -528e-5]],
+    [335079729, 84, [-0.11341, 0.05164, 0.07167]],
+    [1694488999, 90, [-0.0197, -0.05846, 136e-5]],
+    [4260792349, 91, [-0.01999, -0.06365, 474e-5]],
+    [2331097227, 92, [-0.02463, -0.06091, 0.0109]],
+    [2873396820, 84, [-0.06573, 0.04367, 0.09586]],
+    [3695427266, 94, [-948e-5, -0.05967, 557e-5]],
+    [1162538872, 95, [-931e-5, -0.06277, 916e-5]],
+    [843964398, 96, [-0.0131, -0.07103, 0.01851]],
+    [915650285, 84, [0, 0.03817, 0.10603]],
+    [1100252795, 98, [0, -0.06011, 573e-5]],
+    [3634223041, 99, [0, -0.06315, 988e-5]],
+    [2946164567, 100, [0, -0.07685, 0.02018]],
+    [2385498504, 84, [0.06573, 0.04367, 0.09586]],
+    [4180205854, 102, [948e-5, -0.05967, 557e-5]],
+    [1612820644, 103, [931e-5, -0.06277, 916e-5]],
+    [388399154, 104, [0.0131, -0.07103, 0.01851]],
+    [2627370598, 84, [0.11341, 0.05164, 0.07167]],
+    [3952955120, 106, [0.0197, -0.05846, 136e-5]],
+    [1922309962, 107, [0.01999, -0.06365, 474e-5]],
+    [93532124, 108, [0.02463, -0.06091, 0.0109]],
+    [606476547, 84, [0.13135, 0.06106, 594e-5]],
+    [1394682261, 110, [0.02956, -0.05687, -0.01107]],
+    [3391649839, 111, [0.02998, -0.06411, -945e-5]],
+    [3173992633, 112, [0.03204, -0.05444, -528e-5]],
+    [2084899157, 84, [0.10058, 0.06425, -0.06251]],
+    [188889539, 114, [0.02305, -0.05634, -0.03294]],
+    [2454415481, 115, [0.02337, -0.06345, -0.02407]],
+    [3846985967, 116, [0.02755, -0.06281, -0.02129]],
+    [3304681008, 84, [0.05198, 0.06101, -0.07907]],
+    [3019792038, 118, [0.01067, -0.05645, -0.03886]],
+    [720834332, 119, [0.01079, -0.06167, -0.03213]],
+    [1576025994, 120, [0.01337, -0.07156, -0.031]],
+    [3595354590, 84, [0, 0.05896, -0.08224]],
+    [2706108744, 122, [1e-5, -0.05672, -0.03897]],
+    [943890674, 123, [-1e-5, -0.06062, -0.03483]],
+    [1329959012, 124, [0, -0.07446, -0.03632]],
+    [1861265083, 84, [-0.05198, 0.06101, -0.07907]],
+    [435656237, 126, [-0.01067, -0.05645, -0.03886]],
+    [2164180887, 127, [-0.01079, -0.06167, -0.03213]],
+    [4160354049, 128, [-0.01337, -0.07156, -0.031]],
+    [4079459842, 84, [-0.10058, 0.06425, -0.06251]],
+    [2216734356, 130, [-0.02305, -0.05634, -0.03294]],
+    [489291566, 131, [-0.02337, -0.06345, -0.02407]],
+    [1781452728, 132, [-0.02755, -0.06281, -0.02129]]
+  ];
+  var H = hash;
+  var FINGERS = {
+    R: {
+      thumb: [1502495602, 780760036, 3078627934],
+      index: [1539898667, 751816125, 3049692167],
+      middle: [1510643484, 755869578, 3020224048],
+      ring: [1598390681, 675459343, 2974539957],
+      pinky: [1585965998, 696310584, 2961803906]
+    },
+    L: {
+      thumb: [2254334609, 4049164807, 1750076349],
+      index: [2216219848, 4078953566, 1779873252],
+      middle: [2245705471, 4074606185, 1809113043],
+      ring: [2157291642, 4153579756, 1855703382],
+      pinky: [2170012237, 4132500187, 1868145505]
+    }
+  };
+  var TARGET_DIR = /* @__PURE__ */ new Map();
+  var td2 = (a2, b) => TARGET_DIR.set(typeof a2 === "string" ? H(a2) : a2, b === null ? null : typeof b === "string" ? H(b) : b);
+  td2("hips", null);
+  td2("lback", "uback");
+  td2("uback", "thorax");
+  td2("thorax", "neck");
+  td2("neck", "head");
+  td2("head", null);
+  for (const s of "RL") {
+    td2("clavicle_" + s, "shoulder_" + s);
+    td2("shoulder_" + s, "elbow_" + s);
+    td2("elbow_" + s, "hand_" + s);
+    td2("hand_" + s, FINGERS[s].middle[0]);
+    td2("groin_" + s, "knee_" + s);
+    td2("knee_" + s, "ankle_" + s);
+    td2("ankle_" + s, "toe_" + s);
+    td2("toe_" + s, null);
+    for (const hs of Object.values(FINGERS[s])) {
+      td2(hs[0], hs[1]);
+      td2(hs[1], hs[2]);
+      td2(hs[2], null);
+    }
+  }
+  function normName(n) {
+    n = n.split(":").pop().split("|").pop();
+    for (const p of ["mixamorig", "bip01", "bip001", "cc_base_"]) if (n.toLowerCase().startsWith(p)) n = n.slice(p.length);
+    return n.toLowerCase().replace(/[^a-z0-9]/g, "");
+  }
+  var ALIASES = /* @__PURE__ */ new Map();
+  var a = (game, ...names) => {
+    for (const n of names) ALIASES.set(normName(n), typeof game === "string" ? H(game) : game);
+  };
+  a("hips", "Hips", "hip", "pelvis", "Bip01 Pelvis", "root_pelvis");
+  a("lback", "Spine", "abdomen", "LowerBack", "spine_01", "Bip01 Spine", "spine1_");
+  a("uback", "Spine1", "spine_02", "Bip01 Spine1", "abdomen2");
+  a("thorax", "Spine2", "chest", "spine_03", "Bip01 Spine2", "Spine3", "UpperChest");
+  a("neck", "Neck", "neck_01", "Bip01 Neck");
+  a("head", "Head", "Bip01 Head");
+  var FINGER_HASHES = /* @__PURE__ */ new Set();
+  for (const [s, side, sl] of [["R", "Right", "r"], ["L", "Left", "l"]]) {
+    a("clavicle_" + s, side + "Shoulder", sl + "Collar", "clavicle_" + sl, `Bip01 ${s} Clavicle`);
+    a("shoulder_" + s, side + "Arm", sl + "Shldr", "upperarm_" + sl, `Bip01 ${s} UpperArm`, side + "UpperArm");
+    a("elbow_" + s, side + "ForeArm", sl + "ForeArm", "lowerarm_" + sl, `Bip01 ${s} Forearm`, side + "LowerArm");
+    a("hand_" + s, side + "Hand", sl + "Hand", "hand_" + sl, `Bip01 ${s} Hand`);
+    a("groin_" + s, side + "UpLeg", sl + "Thigh", "thigh_" + sl, `Bip01 ${s} Thigh`, side + "UpperLeg", side + "Hip");
+    a("knee_" + s, side + "Leg", sl + "Shin", "calf_" + sl, `Bip01 ${s} Calf`, side + "LowerLeg", side + "Knee");
+    a("ankle_" + s, side + "Foot", sl + "Foot", "foot_" + sl, `Bip01 ${s} Foot`, side + "Ankle");
+    a("toe_" + s, side + "ToeBase", side + "Toe", side + "Toes", "ball_" + sl, `Bip01 ${s} Toe0`, sl + "Toe");
+    for (const [f, hs] of Object.entries(FINGERS[s])) {
+      const F = f[0].toUpperCase() + f.slice(1);
+      for (let k = 0; k < 3; k++) {
+        FINGER_HASHES.add(hs[k]);
+        a(hs[k], `${side}Hand${F}${k + 1}`, `${f}_${String(k + 1).padStart(2, "0")}_${sl}`, `${sl}${F}${k + 1}`, `${side}${F}${k + 1}`);
+      }
+    }
+  }
+  var sub3 = (p, q) => [p[0] - q[0], p[1] - q[1], p[2] - q[2]];
+  var dot3 = (p, q) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
+  var cross3 = (p, q) => [p[1] * q[2] - p[2] * q[1], p[2] * q[0] - p[0] * q[2], p[0] * q[1] - p[1] * q[0]];
+  var len3 = (p) => Math.hypot(p[0], p[1], p[2]);
+  var pos = (M) => [M[0][3], M[1][3], M[2][3]];
+  var rot = (M) => [M[0].slice(0, 3), M[1].slice(0, 3), M[2].slice(0, 3)];
+  function gameEuler(m) {
+    const sy = Math.max(-1, Math.min(1, -m[2][0])), y = Math.asin(sy);
+    if (Math.abs(sy) < 0.999999) return [Math.atan2(m[2][1], m[2][2]), y, Math.atan2(m[1][0], m[0][0])];
+    return [Math.atan2(-m[1][2], m[1][1]), y, 0];
+  }
+  function arc(a2, b) {
+    a2 = a2.map((x) => x / len3(a2));
+    b = b.map((x) => x / len3(b));
+    const v = cross3(a2, b), c = dot3(a2, b);
+    if (c < -0.999999) {
+      let p = Math.abs(a2[0]) < 0.9 ? cross3(a2, [1, 0, 0]) : cross3(a2, [0, 1, 0]);
+      const l = len3(p);
+      p = p.map((x) => x / l);
+      return p.map((pi, i) => p.map((pj, j) => 2 * pi * pj - (i === j ? 1 : 0)));
+    }
+    const vx = [[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]], vx2 = mm(vx, vx);
+    return eye(3).map((r, i) => r.map((x, j) => x + vx[i][j] + vx2[i][j] / (1 + c)));
+  }
+  function orthonormalize(m) {
+    let R = m.map((r) => r.slice());
+    for (let it = 0; it < 30; it++) {
+      const [[a2, b, c], [d, e, f], [g, h, i]] = R;
+      const det = a2 * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+      const cof = [[e * i - f * h, f * g - d * i, d * h - e * g], [c * h - b * i, a2 * i - c * g, b * g - a2 * h], [b * f - c * e, c * d - a2 * f, a2 * e - b * d]];
+      const N = R.map((r, x) => r.map((v, y) => 0.5 * (v + cof[x][y] / det)));
+      let diff = 0;
+      for (let x = 0; x < 3; x++) for (let y = 0; y < 3; y++) diff = Math.max(diff, Math.abs(N[x][y] - R[x][y]));
+      R = N;
+      if (diff < 1e-15) break;
+    }
+    return R;
+  }
+  function unwrap(vals) {
+    const out = vals.slice();
+    for (let i = 1; i < out.length; i++) {
+      let d = vals[i] - vals[i - 1];
+      const dd = ((d + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+      let corr = (dd === -Math.PI && d > 0 ? Math.PI : dd) - d;
+      if (Math.abs(d) < Math.PI) corr = 0;
+      out[i] = out[i - 1] + (vals[i] - vals[i - 1]) + corr;
+    }
+    return out;
+  }
+  function skeleton(model) {
+    if (model) return model.bones.map((b) => ({ hash: b.hash >>> 0, parent: b.parent, offset: b.offset.slice() }));
+    return DEFAULT_SKELETON.map(([h, p, o]) => ({ hash: h >>> 0, parent: p, offset: o }));
+  }
+  function buildMap(src, skel, opts) {
+    const hidx = new Map(skel.map((b, i) => [b.hash, i]));
+    const bmap = /* @__PURE__ */ new Map();
+    const used = () => new Set(bmap.values());
+    for (const n of src.names) {
+      if (n.endsWith("_end")) continue;
+      const h = ALIASES.get(normName(n));
+      if (h === void 0 || !hidx.has(h) || used().has(hidx.get(h))) continue;
+      if (opts.noFingers && FINGER_HASHES.has(h)) continue;
+      bmap.set(n, hidx.get(h));
+    }
+    for (const line of (opts.map || "").split(/\r?\n/)) {
+      const p = line.split("#")[0].trim().split(/\s+/);
+      if (p.length !== 2 || !src.names.includes(p[0])) continue;
+      if (p[1] === "-") {
+        bmap.delete(p[0]);
+        continue;
+      }
+      const h = p[1].startsWith("0x") ? parseInt(p[1], 16) >>> 0 : H(p[1]);
+      if (!hidx.has(h)) continue;
+      for (const [k, v] of [...bmap]) if (v === hidx.get(h)) bmap.delete(k);
+      bmap.set(p[0], hidx.get(h));
+    }
+    return bmap;
+  }
+  function writeTmo(frames, tracks, floats = false) {
+    const TWO_PI = 2 * Math.PI;
+    const keys = [], curves = [];
+    let nkeys = 0;
+    const roundHalfEven = (x) => {
+      const r = Math.round(x);
+      return Math.abs(x % 1) === 0.5 && r % 2 !== 0 ? r - 1 : r;
+    };
+    for (const [, chans] of tracks) {
+      chans.forEach((vals, c) => {
+        if (vals === null) {
+          curves.push([nkeys, 0, 0]);
+          return;
+        }
+        let q;
+        if (floats) q = vals.slice();
+        else if (c < 3) q = vals.map((v2) => Math.max(-32768, Math.min(32767, roundHalfEven(v2 * 1e3))));
+        else if (c < 6) q = vals.map((v2) => ((roundHalfEven(v2 / TWO_PI * 65536) + 32768) % 65536 + 65536) % 65536 - 32768);
+        else q = vals.map((v2) => Math.max(-32768, Math.min(32767, roundHalfEven(v2 * 100))));
+        const first = nkeys;
+        let n = 0, prev = null;
+        q.forEach((v2, f) => {
+          if (n && v2 === prev && f !== q.length - 1) return;
+          keys.push([f, v2]);
+          prev = v2;
+          n++;
+          nkeys++;
+        });
+        curves.push([first, n, q.length - 1]);
+      });
+    }
+    const ks = floats ? 8 : 4;
+    const oHash = 112, oMot = oHash + 4 * tracks.length + 15 & ~15, oCur = oMot + 16, oKey = oCur + 16 * curves.length;
+    const buf = new ArrayBuffer(oKey + ks * keys.length), v = new DataView(buf);
+    v.setUint32(0, 829386100, true);
+    v.setUint32(4, 16, true);
+    v.setUint16(8, floats ? 49 : 48, true);
+    v.setUint16(10, 0, true);
+    v.setFloat32(12, 1e3, true);
+    const B = 16;
+    v.setUint32(B + 0, 1, true);
+    v.setBigUint64(B + 8, BigInt(oMot), true);
+    v.setBigUint64(B + 40, BigInt(oHash), true);
+    v.setUint32(B + 48, curves.length, true);
+    v.setBigUint64(B + 56, BigInt(oCur), true);
+    v.setUint32(B + 64, nkeys, true);
+    v.setBigUint64(B + 72, BigInt(oKey), true);
+    tracks.forEach(([h], i) => v.setUint32(oHash + 4 * i, h >>> 0, true));
+    v.setInt16(oMot, frames, true);
+    v.setInt16(oMot + 2, tracks.length, true);
+    curves.forEach(([first, n, last], i) => {
+      const o = oCur + 16 * i;
+      v.setBigUint64(o, BigInt(first), true);
+      v.setUint16(o + 8, n, true);
+      v.setUint16(o + 10, 0, true);
+      v.setUint16(o + 12, last, true);
+      v.setUint16(o + 14, 0, true);
+    });
+    keys.forEach(([f, val], i) => {
+      const o = oKey + ks * i;
+      v.setUint16(o, f, true);
+      if (floats) v.setFloat32(o + 4, val, true);
+      else v.setInt16(o + 2, val, true);
+    });
+    return { buffer: buf, nkeys };
+  }
+  function retarget(src, opts = {}) {
+    const skel = skeleton(opts.model), hidx = new Map(skel.map((b, i) => [b.hash, i]));
+    const bmap = buildMap(src, skel, opts);
+    const hipsSrc = [...bmap].filter(([, i]) => skel[i].hash === H("hips")).map(([s]) => s)[0];
+    if (!hipsSrc) throw new Error('no hips / pelvis bone recognised: map one with a line "SourceName hips"');
+    const inv = new Map([...bmap].map(([s, i]) => [i, s]));
+    const tw = [];
+    skel.forEach((b, i) => {
+      tw[i] = b.parent >= 0 ? b.offset.map((x, k2) => x + tw[b.parent][k2]) : b.offset.slice();
+    });
+    let rest = src.restWorld();
+    if (opts.restFrame !== void 0 && opts.restFrame !== null && opts.restFrame !== "") rest = src.world(+opts.restFrame / src.fps);
+    const restRot = {};
+    for (const n in rest) restRot[n] = rot(rest[n]);
+    const minY = Math.min(...Object.values(rest).map((m) => m[1][3])), hy = rest[hipsSrc][1][3];
+    const sH = hy - Math.min(minY, hy > 0 && minY > -0.05 * hy ? 0 : minY);
+    const tH = tw[bmap.get(hipsSrc)][1];
+    const k = opts.scale || (sH > 0 ? tH / sH : 1);
+    const kids = {};
+    for (const [n, p] of Object.entries(src.parent)) if (p !== null) (kids[p] = kids[p] || []).push(n);
+    const tchildChain = (ti) => {
+      const first = TARGET_DIR.has(skel[ti].hash) && TARGET_DIR.get(skel[ti].hash) !== null ? hidx.get(TARGET_DIR.get(skel[ti].hash)) : void 0;
+      let j = first;
+      while (j !== void 0 && !inv.has(j)) {
+        const nx = TARGET_DIR.get(skel[j].hash);
+        j = nx === void 0 || nx === null ? void 0 : hidx.get(nx);
+      }
+      return [first, j];
+    };
+    const align = /* @__PURE__ */ new Map();
+    for (const [s, ti] of bmap) {
+      const [first, mapped] = tchildChain(ti);
+      let ds = null, dt = null;
+      if (mapped !== void 0) {
+        ds = sub3(pos(rest[inv.get(mapped)]), pos(rest[s]));
+        dt = sub3(tw[mapped], tw[ti]);
+      } else if (first !== void 0 && (kids[s] || []).length === 1) {
+        ds = sub3(pos(rest[kids[s][0]]), pos(rest[s]));
+        dt = sub3(tw[first], tw[ti]);
+      } else if (first === void 0 && (kids[s] || []).length && skel[ti].parent >= 0 && src.parent[s] in rest) {
+        align.set(ti, null);
+        continue;
+      }
+      align.set(ti, ds && len3(ds) > 1e-9 && len3(dt) > 1e-9 ? arc(dt, ds) : eye(3));
+    }
+    for (const ti of [...align.keys()]) {
+      if (align.get(ti) !== null) continue;
+      let p = skel[ti].parent;
+      while (p >= 0 && !align.has(p)) p = skel[p].parent;
+      align.set(ti, p >= 0 && align.get(p) ? align.get(p) : eye(3));
+    }
+    if (opts.noAlign) for (const ti of align.keys()) align.set(ti, eye(3));
+    const fps = opts.fps || 60;
+    const nfr = Math.floor(src.duration * fps + 1e-6) + 1;
+    const f0 = opts.start || 0, f1 = Math.min(opts.end !== void 0 && opts.end !== null && opts.end !== "" ? +opts.end : nfr - 1, nfr - 1);
+    const frames = [];
+    for (let f = f0; f <= f1; f++) frames.push(f);
+    const tiHips = bmap.get(hipsSrc), rootMode = opts.root || "hips", ido = hidx.get(H("ido"));
+    const rots = new Map([...bmap.values()].map((i) => [i, []]));
+    const transHips = [], transIdo = [];
+    let firstXZ = null;
+    for (const f of frames) {
+      const W = src.world(f / fps);
+      const G = new Array(skel.length);
+      skel.forEach((b, i) => {
+        const pg = b.parent >= 0 ? G[b.parent] : eye(3);
+        if (inv.has(i)) {
+          const s = inv.get(i);
+          G[i] = mm(mm(rot(W[s]), tr3(restRot[s])), align.get(i));
+          rots.get(i).push(gameEuler(orthonormalize(mm(tr3(pg), G[i]))));
+        } else G[i] = pg;
+      });
+      const p = pos(W[hipsSrc]).map((x) => x * k);
+      if (!firstXZ) firstXZ = p.slice();
+      const d = [p[0] - firstXZ[0], p[1] - tw[tiHips][1], p[2] - firstXZ[2]];
+      if (rootMode === "inplace") transHips.push([0, d[1], 0]);
+      else if (rootMode === "ido" && ido !== void 0) {
+        transHips.push([0, d[1], 0]);
+        transIdo.push([d[0], 0, d[2]]);
+      } else transHips.push(d);
+    }
+    const tracks = [];
+    if (rootMode === "ido" && ido !== void 0) tracks.push([skel[ido].hash, [0, 1, 2].map((c) => transIdo.map((v) => v[c])).concat([null, null, null, null, null, null])]);
+    for (const i of [...rots.keys()].sort((x, y) => x - y)) {
+      const r = rots.get(i), ch = new Array(9).fill(null);
+      if (i === tiHips) for (let c = 0; c < 3; c++) ch[c] = transHips.map((v) => v[c]);
+      for (let c = 0; c < 3; c++) ch[3 + c] = unwrap(r.map((e) => e[c]));
+      tracks.push([skel[i].hash, ch]);
+    }
+    const { buffer, nkeys } = writeTmo(frames.length, tracks, !!opts.float);
+    const order = [...bmap].sort((x, y) => x[1] - y[1]).map(([s]) => s);
+    return { buffer, info: {
+      frames: frames.length,
+      fps,
+      srcFps: src.fps,
+      tracks: tracks.length,
+      keys: nkeys,
+      size: buffer.byteLength,
+      scale: k,
+      mapped: order,
+      unmapped: src.names.filter((n) => !bmap.has(n) && !n.endsWith("_end")).sort()
+    } };
+  }
+
+  // src/cat.js
+  function parseCat(buf) {
+    const d = new Uint8Array(buf), v = new DataView(buf), N = d.length;
+    const u32 = (o) => o + 4 <= N ? v.getUint32(o, true) : 0;
+    const isNode = (o) => {
+      const k = u32(o), n = u32(o + 4);
+      if (k === 1 && n === 1) return u32(o + 12) === 256;
+      return k === 0 && n > 0 && n < 65536 && u32(o + 12) === 256;
+    };
+    const tag = (o, s) => o + s.length <= N && [...s].every((c, i) => d[o + i] === c.charCodeAt(0));
+    const kind = (o) => o + 4 > N ? "blob" : tag(o, "tmd") ? "tmd" : tag(o, "tmo") ? "tmo" : tag(o, "DDS ") ? "dds" : "blob";
+    const isTexPack = (o) => {
+      const hs = u32(o), n = u32(o + 4);
+      return n && n < 4096 && hs >= 12 + 4 * n && hs <= 4096 && o + hs + 4 <= N && tag(o + hs, "DDS ");
+    };
+    const names = (o, size) => {
+      const out2 = [];
+      let cur = "";
+      for (let i = o; i < o + size && i < N && d[i]; i++) {
+        const c = d[i];
+        if (c === 13) continue;
+        if (c >= 128) {
+          cur += String.fromCharCode(c);
+          continue;
+        }
+        if (c === 10 || c === 44) {
+          if (cur) out2.push(cur);
+          cur = "";
+          continue;
+        }
+        if (c < 32 || c > 126) return [];
+        cur += String.fromCharCode(c);
+      }
+      if (cur) out2.push(cur);
+      return out2;
+    };
+    const out = [];
+    let texGroup = 0;
+    const walk = (o, end, depth) => {
+      if (depth > 16 || o + 8 > N) return;
+      const k = u32(o), n = u32(o + 4);
+      if (k === 1) {
+        const child = o + u32(o + 12), sz = u32(o + 16);
+        walk(child, sz && child + sz <= end ? child + sz : end, depth + 1);
+        return;
+      }
+      if (n === 0 || n >= 65536) return;
+      const offs = [], sizes = [];
+      for (let i = 0; i < n; i++) {
+        offs.push(o + u32(o + 20 + 4 * i));
+        sizes.push(u32(o + 20 + 4 * (n + i)));
+      }
+      for (let i = 0; i < n; i++) {
+        let lim = end;
+        for (let j = 0; j < n; j++) if (offs[j] > offs[i]) lim = Math.min(lim, offs[j]);
+        if (sizes[i] === 0 || offs[i] + sizes[i] > end) sizes[i] = lim > offs[i] ? lim - offs[i] : 0;
+      }
+      let nm = [], first = 0;
+      if (!isNode(offs[0]) && kind(offs[0]) === "blob" && !isTexPack(offs[0]) && !tag(offs[0], "fx00")) {
+        nm = names(offs[0], sizes[0]);
+        first = 1;
+      }
+      if (n - first === 1 && isTexPack(offs[first])) {
+        const p = offs[first], hs = u32(p), cnt = u32(p + 4), tot = u32(p + 8), g = texGroup++;
+        for (let i = 0; i < cnt; i++) {
+          const a2 = u32(p + 12 + 4 * i), b = i + 1 < cnt ? u32(p + 16 + 4 * i) : tot;
+          const e = { name: i < nm.length ? nm[i] : "tex" + i, kind: "dds", offset: p + hs + a2, size: b > a2 ? b - a2 : 0, group: g };
+          if (e.offset + e.size > N) e.size = Math.max(0, N - e.offset);
+          out.push(e);
+        }
+        return;
+      }
+      for (let i = first; i < n; i++) {
+        if (isNode(offs[i])) {
+          walk(offs[i], offs[i] + sizes[i], depth + 1);
+          continue;
+        }
+        const kd = kind(offs[i]);
+        out.push({ name: i - first < nm.length ? nm[i - first] : kd + i, kind: kd, offset: offs[i], size: sizes[i], group: -1 });
+      }
+    };
+    walk(0, N, 0);
+    return out.filter((e) => e.offset + e.size <= N);
+  }
+
+  // src/dds.js
+  function rgb565(c, o, k) {
+    o[k] = (c >> 11 & 31) * 255 / 31 | 0;
+    o[k + 1] = (c >> 5 & 63) * 255 / 63 | 0;
+    o[k + 2] = (c & 31) * 255 / 31 | 0;
+    o[k + 3] = 255;
+  }
+  function decodeDDS(buf, ofs = 0, size = buf.byteLength - ofs) {
+    const v = new DataView(buf, ofs, size), s = new Uint8Array(buf, ofs, size);
+    if (size < 128 || v.getUint32(0, true) !== 542327876) throw new Error("not a DDS file");
+    const h = v.getUint32(12, true), w = v.getUint32(16, true);
+    const pf = v.getUint32(80, true), four = v.getUint32(84, true), bits = v.getUint32(88, true);
+    let o = 128;
+    if (pf & 4 && four === 808540228) o += 20;
+    if (!w || !h || w > 16384 || h > 16384) throw new Error("bad DDS size");
+    const out = new Uint8Array(w * h * 4).fill(255);
+    if (pf & 4) {
+      const cc = String.fromCharCode(four & 255, four >> 8 & 255, four >> 16 & 255, four >>> 24);
+      const mode = cc === "DXT1" ? 1 : cc === "DXT3" ? 3 : cc === "DXT5" ? 5 : 0;
+      if (!mode) throw new Error("unsupported DDS format " + cc);
+      const bs = mode === 1 ? 8 : 16, bw = w + 3 >> 2, bh = h + 3 >> 2;
+      if (o + bw * bh * bs > size) throw new Error("DDS data truncated");
+      const pal = new Uint8Array(16), px = new Uint8Array(64), a2 = new Uint8Array(8);
+      for (let by = 0; by < bh; by++)
+        for (let bx = 0; bx < bw; bx++) {
+          const b = o + (by * bw + bx) * bs, cb = mode === 1 ? b : b + 8;
+          const c0 = s[cb] | s[cb + 1] << 8, c1 = s[cb + 2] | s[cb + 3] << 8;
+          rgb565(c0, pal, 0);
+          rgb565(c1, pal, 4);
+          if (c0 > c1 || mode !== 1) {
+            for (let i = 0; i < 3; i++) {
+              pal[8 + i] = (2 * pal[i] + pal[4 + i]) / 3 | 0;
+              pal[12 + i] = (pal[i] + 2 * pal[4 + i]) / 3 | 0;
+            }
+            pal[11] = pal[15] = 255;
+          } else {
+            for (let i = 0; i < 3; i++) {
+              pal[8 + i] = (pal[i] + pal[4 + i]) / 2 | 0;
+              pal[12 + i] = 0;
+            }
+            pal[11] = 255;
+            pal[15] = 0;
+          }
+          const bitsC = (s[cb + 4] | s[cb + 5] << 8 | s[cb + 6] << 16 | s[cb + 7] << 24) >>> 0;
+          for (let i = 0; i < 16; i++) {
+            const p = (bitsC >>> 2 * i & 3) * 4;
+            px[i * 4] = pal[p];
+            px[i * 4 + 1] = pal[p + 1];
+            px[i * 4 + 2] = pal[p + 2];
+            px[i * 4 + 3] = pal[p + 3];
+          }
+          if (mode === 3) {
+            for (let i = 0; i < 16; i++) px[i * 4 + 3] = (s[b + (i >> 1)] >> 4 * (i & 1) & 15) * 17;
+          } else if (mode === 5) {
+            a2[0] = s[b];
+            a2[1] = s[b + 1];
+            if (a2[0] > a2[1]) for (let i = 1; i < 7; i++) a2[i + 1] = ((7 - i) * a2[0] + i * a2[1]) / 7 | 0;
+            else {
+              for (let i = 1; i < 5; i++) a2[i + 1] = ((5 - i) * a2[0] + i * a2[1]) / 5 | 0;
+              a2[6] = 0;
+              a2[7] = 255;
+            }
+            const lo = s[b + 2] | s[b + 3] << 8 | s[b + 4] << 16, hi = s[b + 5] | s[b + 6] << 8 | s[b + 7] << 16;
+            for (let i = 0; i < 16; i++) px[i * 4 + 3] = a2[i < 8 ? lo >> 3 * i & 7 : hi >> 3 * (i - 8) & 7];
+          }
+          for (let i = 0; i < 16; i++) {
+            const x = bx * 4 + (i & 3), y = by * 4 + (i >> 2);
+            if (x < w && y < h) {
+              const q = (y * w + x) * 4;
+              out[q] = px[i * 4];
+              out[q + 1] = px[i * 4 + 1];
+              out[q + 2] = px[i * 4 + 2];
+              out[q + 3] = px[i * 4 + 3];
+            }
+          }
+        }
+      return { width: w, height: h, rgba: out };
+    }
+    if (bits !== 32 && bits !== 24) throw new Error("unsupported uncompressed DDS (" + bits + " bpp)");
+    const bpp = bits / 8;
+    if (o + w * h * bpp > size) throw new Error("DDS data truncated");
+    const masks = [92, 96, 100, 104].map((k) => v.getUint32(k, true));
+    const chan = (val, mask) => {
+      if (!mask) return 255;
+      let sh = 0;
+      while (!(mask >>> sh & 1)) sh++;
+      const m = mask >>> sh;
+      return Math.round((val >>> sh & m) * 255 / m);
+    };
+    for (let i = 0; i < w * h; i++) {
+      const p = o + i * bpp;
+      const val = bpp === 4 ? v.getUint32(p, true) : s[p] | s[p + 1] << 8 | s[p + 2] << 16;
+      out[i * 4] = chan(val, masks[0]);
+      out[i * 4 + 1] = chan(val, masks[1]);
+      out[i * 4 + 2] = chan(val, masks[2]);
+      out[i * 4 + 3] = pf & 1 ? chan(val, masks[3]) : 255;
+    }
+    return { width: w, height: h, rgba: out };
+  }
+
+  // src/tmd2.js
+  var VF = {
+    POS: 2,
+    NORMAL: 4,
+    TANGENTS: 8,
+    UV0: 16,
+    UV1: 32,
+    UV2: 64,
+    COLOR: 128,
+    U100: 256,
+    U200: 512,
+    SKIN: 1024,
+    INDEX32: 2048,
+    SKELETON: 8192
+  };
+  var Model = class {
+    /** buf: ArrayBuffer holding the tmd2 file (a copy cut out of its catalogue) */
+    constructor(buf, name = "") {
+      this.name = name;
+      const v = new DataView(buf), u8 = new Uint8Array(buf);
+      this.buf = buf;
+      this.v = v;
+      const q = (o2) => Number(v.getBigUint64(o2, true)), u = (o2) => v.getUint32(o2, true);
+      const f = this.flags = v.getUint16(6, true);
+      this.skinned = v.getUint16(8, true);
+      this.version = v.getUint16(10, true);
+      this.animFrames = v.getUint16(14, true);
+      const P = {
+        meshes: q(40),
+        staticX: q(48),
+        animX: q(56),
+        commands: q(64),
+        materials: q(72),
+        params: q(80),
+        user: q(88),
+        keys: q(96),
+        groups: q(104),
+        indices: q(112),
+        texSlots: q(136),
+        vertices: q(144)
+      };
+      const Nn = { meshes: u(168), materials: u(184), userSize: u(192), groups: u(200), texSlots: u(216), vertices: u(220) };
+      this.P = P;
+      this.counts = Nn;
+      if (!(f & VF.POS)) throw new Error(name + ": model has no positions");
+      const n = Nn.vertices;
+      this.numVertices = n;
+      const pos2 = this.pos = new Float32Array(n * 3);
+      const wgt = f & VF.SKIN ? this.weights = new Float32Array(n * 4) : null;
+      const idx = f & VF.SKIN ? this.indices = new Uint8Array(n * 4) : null;
+      const nrm = f & VF.NORMAL ? this.normal = new Float32Array(n * 3) : null;
+      const tan = f & VF.TANGENTS ? this.tangent = new Float32Array(n * 3) : null;
+      const bin = f & VF.TANGENTS ? this.binormal = new Float32Array(n * 3) : null;
+      const col = f & VF.COLOR ? this.color = new Float32Array(n * 4) : null;
+      const uvs = [VF.UV0, VF.UV1, VF.UV2].map((bit) => f & bit ? new Float32Array(n * 2) : null);
+      [this.uv0, this.uv1, this.uv2] = uvs;
+      const sn = (b) => b / 255 * 2 - 1;
+      let o = P.vertices;
+      const bmin = [Infinity, Infinity, Infinity], bmax = [-Infinity, -Infinity, -Infinity];
+      for (let i = 0; i < n; i++) {
+        for (let k = 0; k < 3; k++) {
+          const x = v.getFloat32(o + 4 * k, true);
+          pos2[i * 3 + k] = x;
+          if (x < bmin[k]) bmin[k] = x;
+          if (x > bmax[k]) bmax[k] = x;
+        }
+        o += 12;
+        if (wgt) {
+          for (let k = 0; k < 4; k++) {
+            wgt[i * 4 + k] = u8[o + k] / 255;
+            idx[i * 4 + k] = u8[o + 4 + k];
+          }
+          o += 8;
+        }
+        if (nrm) {
+          for (let k = 0; k < 3; k++) nrm[i * 3 + k] = sn(u8[o + k]);
+          o += 4;
+        }
+        if (tan) {
+          for (let k = 0; k < 3; k++) {
+            tan[i * 3 + k] = sn(u8[o + k]);
+            bin[i * 3 + k] = sn(u8[o + 4 + k]);
+          }
+          o += 8;
+        }
+        if (col) {
+          for (let k = 0; k < 4; k++) col[i * 4 + k] = u8[o + k] / 255;
+          o += 4;
+        }
+        if (f & VF.U100) o += 4;
+        if (f & VF.U200) o += 4;
+        for (const uv of uvs) {
+          if (!uv) continue;
+          uv[i * 2] = v.getInt16(o, true) / 1024;
+          uv[i * 2 + 1] = (v.getInt16(o + 2, true) + 1024) / 1024;
+          o += 4;
+        }
+      }
+      this.boundsMin = bmin;
+      this.boundsMax = bmax;
+      const i32 = !!(f & VF.INDEX32);
+      this.groups = [];
+      for (let g = 0; g < Nn.groups; g++) {
+        const go = P.groups + 16 * g, tris = u(go), first = q(go + 8);
+        const a2 = new Uint32Array(tris * 3);
+        for (let k = 0; k < a2.length; k++) {
+          const x = i32 ? u(P.indices + (first * 3 + k) * 4) : v.getUint16(P.indices + (first * 3 + k) * 2, true);
+          a2[k] = x < n ? x : 0;
+        }
+        this.groups.push(a2);
+      }
+      this.meshes = [];
+      for (let m = 0; m < Nn.meshes; m++) {
+        const mo = P.meshes + 56 * m;
+        const ncmd = v.getUint16(mo + 24, true), first = q(mo + 32);
+        const cmds = [];
+        for (let k = 0; k < ncmd; k++) {
+          const c = v.getUint16(P.commands + 2 * (first + k), true);
+          cmds.push([c >> 12, c & 4095]);
+        }
+        this.meshes.push({ flags: u8[mo + 26], xformType: u8[mo + 27], xformIndex: u(mo + 48), cmds });
+      }
+      this.materials = [];
+      for (let m = 0; m < Nn.materials; m++) {
+        const mo = P.materials + 20 * m;
+        const fourcc = String.fromCharCode(u8[mo + 4], u8[mo + 5], u8[mo + 6], u8[mo + 7]);
+        const ft = v.getUint16(mo + 8, true), nt = v.getUint16(mo + 10, true);
+        const slots = [];
+        for (let s = 0; s < nt; s++) {
+          const so = P.texSlots + 12 * (ft + s);
+          slots.push({ hash: u(so), kind: u8[so + 7] });
+        }
+        this.materials.push({ fourcc, slots, firstParam: v.getUint16(mo + 12, true), numParams: v.getUint16(mo + 14, true) });
+      }
+      this.bones = [];
+      this.invBind = [];
+      this.skinBatches = [];
+      if (f & VF.SKELETON) {
+        const S = { batches: q(224), palette: q(232), inv: q(240), bones: q(248), nb: u(256), ninv: u(264), nbone: u(268) };
+        for (let b = 0; b < S.nbone; b++) {
+          const bo = S.bones + 24 * b;
+          this.bones.push({
+            hash: u(bo),
+            offset: [v.getFloat32(bo + 4, true), v.getFloat32(bo + 8, true), v.getFloat32(bo + 12, true)],
+            parent: v.getInt32(bo + 16, true)
+          });
+        }
+        for (let b = 0; b < S.ninv; b++) {
+          const m = new Float64Array(16);
+          for (let k = 0; k < 16; k++) m[k] = v.getFloat32(S.inv + 64 * b + 4 * k, true);
+          this.invBind.push(m);
+        }
+        for (let s = 0; s < S.nb; s++) {
+          const so = S.batches + 16 * s, cnt = Math.max(0, v.getInt32(so, true)), off = q(so + 8);
+          this.skinBatches.push(Array.from(u8.subarray(S.palette + off, S.palette + off + cnt)));
+        }
+      }
+      this.numBones = this.bones.length;
+      this.boneIndex = /* @__PURE__ */ new Map();
+      this.bones.forEach((b, i) => {
+        if (!this.boneIndex.has(b.hash)) this.boneIndex.set(b.hash, i);
+      });
+      this.meshTags = [];
+      if (P.user && Nn.userSize && P.user + Nn.userSize <= u8.length) {
+        let p = P.user;
+        const end = P.user + Nn.userSize;
+        while (p < end && this.meshTags.length < Nn.meshes) {
+          let z = p;
+          while (z < end && u8[z]) z++;
+          let s = "";
+          for (let k = p; k < z; k++) s += String.fromCharCode(u8[k]);
+          this.meshTags.push(s);
+          p = z + 1;
+        }
+      }
+      if (this.meshTags.length !== Nn.meshes) this.meshTags = [];
+      this.textures = [];
+    }
+    findBone(h) {
+      const i = this.boneIndex.get(h);
+      return i === void 0 ? -1 : i;
+    }
+    /** one animated scalar (EvalBaked / EvalKeyed) */
+    channel(off, frame) {
+      const v = this.v, n = v.getUint16(off, true);
+      if (n === 0) return v.getFloat32(off + 4, true);
+      const first = v.getUint32(off + 4, true), K = this.P.keys;
+      if (this.version !== 513) return v.getFloat32(K + 4 * (n === 1 ? first : first + frame % n), true);
+      const key = (j) => [v.getUint16(K + 8 * (first + j), true), v.getFloat32(K + 8 * (first + j) + 4, true)];
+      if (n === 1) return key(0)[1];
+      const last = key(n - 1)[0];
+      const t = last ? frame % last : 0;
+      for (let j = 0; j < n; j++) {
+        const [fj, vj] = key(j);
+        if (t < fj) {
+          if (j === 0) return key(0)[1];
+          const [f0, v0] = key(j - 1);
+          return v0 + (t - f0) / (fj - f0) * (vj - v0);
+        }
+      }
+      return 0;
+    }
+    /** shader constants of a material at a frame: channel k -> out[k] (CTmd2MatAnimePlayer::Apply) */
+    materialParams(mi, frame, out = new Float32Array(32)) {
+      out.fill(0);
+      const m = this.materials[mi];
+      if (!m) return out;
+      const f = Math.floor(frame) & 65535;
+      for (let k = 0; k < Math.min(m.numParams, 32); k++) out[k] = this.channel(this.P.params + 8 * (m.firstParam + k), f);
+      return out;
+    }
+    /** mesh node transform (CalcMeshMatrix) and visibility (IsMeshVisible) */
+    meshMatrix(mi, frame) {
+      const m = this.meshes[mi], v = this.v;
+      if (m.xformType === 1) {
+        const o = this.P.staticX + 36 * m.xformIndex, g = (k) => v.getFloat32(o + 4 * k, true);
+        return { matrix: composeSRT([g(0), g(1), g(2)], [g(3), g(4), g(5)], [g(6), g(7), g(8)]), visible: true };
+      }
+      if (m.xformType === 2) {
+        const f = Math.floor(frame) & 65535, o = this.P.animX + 80 * m.xformIndex;
+        const c = [];
+        for (let k = 0; k < 10; k++) c.push(this.channel(o + 8 * k, f));
+        return { matrix: composeSRT(c.slice(0, 3), c.slice(3, 6), c.slice(6, 9)), visible: c[9] !== 0 };
+      }
+      return { matrix: null, visible: true };
+    }
+    findTexture(h) {
+      return this.textures.findIndex((t) => t.hash === h);
+    }
+  };
+  function catTextures(buf, entries, forceGroup = -1) {
+    const out = [];
+    for (const e of entries) {
+      if (e.kind !== "dds") continue;
+      try {
+        const t = decodeDDS(buf, e.offset, e.size);
+        out.push({ name: e.name, hash: hash(e.name), group: forceGroup >= 0 ? forceGroup : e.group, ...t });
+      } catch (err) {
+        console.warn(e.name, err.message);
+      }
+    }
+    return out;
+  }
+  function modelFromCat(buf, want = "") {
+    const entries = parseCat(buf);
+    const tmds = entries.filter((e2) => e2.kind === "tmd");
+    const e = want ? tmds.find((x) => x.name === want) : tmds[0];
+    if (!e) throw new Error(want ? "catalogue has no model " + want : "catalogue holds no model");
+    const m = new Model(buf.slice(e.offset, e.offset + e.size), e.name);
+    m.textures = catTextures(buf, entries);
+    return m;
+  }
+
+  // src/fbx2tmo_page.js
+  var $ = (id) => document.getElementById(id);
+  var state = { fbx: null, fbxName: "", model: null, modelName: "", url: null };
+  function status(s, kind = "") {
+    const el = $("status");
+    el.textContent = s;
+    el.className = kind;
+  }
+  function pick(btn, input, drop, onFile) {
+    $(btn).addEventListener("click", () => $(input).click());
+    $(input).addEventListener("change", (e) => {
+      if (e.target.files[0]) onFile(e.target.files[0]);
+      e.target.value = "";
+    });
+    const d = $(drop);
+    d.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      d.classList.add("over");
+    });
+    d.addEventListener("dragleave", () => d.classList.remove("over"));
+    d.addEventListener("drop", (e) => {
+      e.preventDefault();
+      d.classList.remove("over");
+      if (e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]);
+    });
+  }
+  pick("fbxbtn", "fbxfile", "fbxdrop", async (f) => {
+    state.fbx = await f.arrayBuffer();
+    state.fbxName = f.name;
+    $("fbxname").textContent = `${f.name} (${(f.size / 1024).toFixed(0)} KB)`;
+    $("fbxname").classList.remove("none");
+    $("convert").disabled = false;
+    status("");
+  });
+  pick("mdlbtn", "mdlfile", "mdldrop", async (f) => {
+    try {
+      const m = modelFromCat(await f.arrayBuffer());
+      if (!m || !m.bones.length) throw new Error("no skeleton in this file");
+      state.model = m;
+      state.modelName = f.name;
+      $("mdlname").textContent = `${f.name}: ${m.name || "model"}, ${m.bones.length} bones`;
+      $("mdlname").classList.remove("none");
+      $("mdlclear").hidden = false;
+      status("");
+    } catch (e) {
+      status(`${f.name}: ${e.message}`, "err");
+    }
+  });
+  $("mdlclear").addEventListener("click", () => {
+    state.model = null;
+    $("mdlclear").hidden = true;
+    $("mdlname").textContent = "default: pl00 body (ninjacos00_00)";
+    $("mdlname").classList.add("none");
+  });
+  var num = (id) => {
+    const v = $(id).value.trim();
+    return v === "" ? void 0 : +v;
+  };
+  $("convert").addEventListener("click", async () => {
+    if (!state.fbx) return;
+    $("convert").disabled = true;
+    $("result").classList.remove("show");
+    status("reading the FBX\u2026");
+    await new Promise((r) => setTimeout(r, 20));
+    try {
+      const src = await FbxAnim.load(state.fbx.slice(0));
+      status("retargeting\u2026");
+      await new Promise((r) => setTimeout(r, 20));
+      const opts = {
+        model: state.model,
+        fps: num("fps") || 60,
+        root: $("root").value,
+        scale: num("scale"),
+        start: num("start") || 0,
+        end: num("end"),
+        restFrame: num("restframe"),
+        float: $("float").checked,
+        noFingers: $("nofingers").checked,
+        noAlign: $("noalign").checked,
+        map: $("map").value
+      };
+      const t0 = performance.now();
+      const { buffer, info } = retarget(src, opts);
+      if (state.url) URL.revokeObjectURL(state.url);
+      state.url = URL.createObjectURL(new Blob([buffer], { type: "application/octet-stream" }));
+      const name = state.fbxName.replace(/\.fbx$/i, "") + ".tmo";
+      const a2 = $("download");
+      a2.href = state.url;
+      a2.download = name;
+      a2.querySelector("button").textContent = `Download ${name}`;
+      $("stats").textContent = `${info.frames} frames @ ${info.fps} fps (source ${+info.srcFps.toFixed(3)} fps, ${src.duration.toFixed(2)} s)
+${info.tracks} tracks, ${info.keys} keys, ${info.size} bytes, scale ${info.scale.toFixed(5)}` + (state.model ? `
+target: ${state.modelName}` : "");
+      const list = (el, title, names) => {
+        el.textContent = "";
+        if (!names.length) return;
+        const b = document.createElement("b");
+        b.textContent = `${title} (${names.length}): `;
+        el.append(b, document.createTextNode(names.join(", ")));
+      };
+      list($("mapped"), "Mapped", info.mapped);
+      list($("unmapped"), "Not mapped", info.unmapped);
+      $("result").classList.add("show");
+      status(`done in ${((performance.now() - t0) / 1e3).toFixed(1)} s`, "ok");
+    } catch (e) {
+      console.error(e);
+      status(e.message || String(e), "err");
+    }
+    $("convert").disabled = false;
+  });
+})();
+
+</script>
+</body>
+</html>
